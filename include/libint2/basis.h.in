@@ -36,6 +36,7 @@
 #include <libint2.h>
 #include <libint2/shell.h>
 #include <libint2/atom.h>
+#include <libint2/chemistry/elements.h>
 
 namespace libint2 {
 
@@ -61,6 +62,7 @@ namespace libint2 {
       /**
        * @param name basis set name
        * @param atoms \c std::vector of Atom objects
+       * @param name of custom basis set file and path
        * \note All atoms receive the same basis set
        * \note \c name will be "canonicalized" using BasisSet::canonicalize(name) to
        *       produce the file name where the basis will be sought. This file needs to contain
@@ -74,196 +76,312 @@ namespace libint2 {
        *       </ol>
        */
       BasisSet(std::string name,
-               const std::vector<Atom>& atoms) : name_(std::move(name)) {
+               const std::vector<Atom>& atoms, std::string customname="") : name_(std::move(name)),customname_(std::move(customname)) {
 
-        // read in the library file contents
+        auto cust_basis = read_custom();
+        
+        // String is the basis component name
+        std::map<std::string,std::vector<std::vector<std::vector<libint2::Shell>>>> all_comp_basis_sets;
+
         std::string basis_lib_path = data_path();
-        auto canonical_name = canonicalize_name(name_);
-        // some basis sets use cartesian d shells by convention, the convention is taken from Gaussian09
-        auto force_cartesian_d = gaussian_cartesian_d_convention(canonical_name);
-        
-        // parse the name into components
-        std::vector<std::string> basis_component_names = decompose_name_into_components(canonical_name);
-        
-        // ref_shells[component_idx][Z] => vector of Shells
-        std::vector<std::vector<std::vector<libint2::Shell>>> component_basis_sets;
-        component_basis_sets.reserve(basis_component_names.size());
-        
-        // read in ALL basis set components
-        for(const auto& basis_component_name: basis_component_names) {
-          auto file_dot_g94 = basis_lib_path + "/" + basis_component_name + ".g94";
-        
-          // use same cartesian_d convention for all components!
-          component_basis_sets.emplace_back(read_g94_basis_library(file_dot_g94, force_cartesian_d));
-        }
-        
-        // for each atom find the corresponding basis components
-        for(auto a=0; a<atoms.size(); ++a) {
+        // Reading in default basis set used for most of the atoms
+        {
+          // read in the library file contents
+          auto canonical_name = canonicalize_name(name_);
+          // some basis sets use cartesian d shells by convention, the convention is taken from Gaussian09
+          auto force_cartesian_d = gaussian_cartesian_d_convention(canonical_name);
 
-          auto Z = atoms[a].atomic_number;
-          
-          // add each component in order
-          for(auto comp_idx=0; comp_idx!=component_basis_sets.size(); ++comp_idx) {
-            const auto& component_basis_set = component_basis_sets[comp_idx];
-            if (component_basis_set[Z].empty())
-              throw std::string("did not find the basis for this Z in ") +
+          // parse the name into components
+          std::vector<std::string> basis_component_names = decompose_name_into_components(canonical_name);
+
+          // ref_shells[component_idx][Z] => vector of Shells
+          std::vector<std::vector<std::vector<libint2::Shell>>> component_basis_sets;
+          component_basis_sets.reserve(basis_component_names.size());
+
+          // read in ALL basis set components
+          for(const auto& basis_component_name: basis_component_names) {
+            auto file_dot_g94 = basis_lib_path + "/" + basis_component_name + ".g94";
+            
+            // use same cartesian_d convention for all components!
+            component_basis_sets.emplace_back(read_g94_basis_library(file_dot_g94, force_cartesian_d));
+          }
+          // Fully resolved initial name
+          all_comp_basis_sets[canonical_name]=component_basis_sets;
+        }  
+
+        
+        // Reading in custom basis sets used for atoms in the custom file
+        {
+          for(auto item : cust_basis){
+            auto basis_name = item.second.begin()->second;
+            auto canonical_name = canonicalize_name(basis_name);
+            auto force_cartesian_d = gaussian_cartesian_d_convention(canonical_name);
+            std::vector<std::string> basis_component_names = decompose_name_into_components(canonical_name);
+            std::vector<std::vector<std::vector<libint2::Shell>>> component_basis_sets;
+            component_basis_sets.reserve(basis_component_names.size());
+            for(const auto& basis_component_name: basis_component_names) {
+              auto file_dot_g94 = basis_lib_path + "/" + basis_component_name + ".g94";
+              component_basis_sets.emplace_back(read_g94_basis_library(file_dot_g94, force_cartesian_d));
+            }
+            all_comp_basis_sets[canonical_name]=component_basis_sets;
+          }
+        }
+
+        
+          // for each atom find the corresponding basis components
+          for(auto a=0; a<atoms.size(); ++a) {
+
+            
+            // This is where we need to look to see if the specific atom has a customized basis set
+            // Cust basis uses the label of the atoms which start at 1 not 0
+            if(cust_basis.count(a+1)){
+                
+              // Will be using the Z for the atom we are stealing the coefficients from
+              using libint2::chemistry::element_info;
+              int Z = -1;
+              for(const auto& e: element_info){
+                if(strcaseequal(e.symbol,cust_basis[a+1].first)){
+                  Z = e.Z;
+                  break;
+                }
+              }
+              if(Z==-1){
+                std::cerr << "Element Symbol " << cust_basis[a+1].first << std::endl;
+                throw std::runtime_error("Did not recognize element symbol in custom file");
+              }
+
+              auto basis_name = cust_basis[a+1].second.begin()->second;
+              auto canonical_name = canonicalize_name(basis_name);
+              auto component_basis_sets = all_comp_basis_sets[basis_name];
+
+              // add each component in order
+              for(auto comp_idx=0; comp_idx!=component_basis_sets.size(); ++comp_idx) {
+                const auto& component_basis_set = component_basis_sets[comp_idx];
+
+                if (component_basis_set[Z].empty())
+                  throw std::string("did not find the basis for this Z in ") +
                     basis_lib_path + "/" + basis_component_names[comp_idx] + ".g94";
 
-            for(auto s: component_basis_set[Z]) {
-              this->push_back(std::move(s));
-              this->back().move({{atoms[a].x, atoms[a].y, atoms[a].z}});
-            } // shell loop
-          } // basis component loop
-        } // atom loop
+                for(auto s: component_basis_set[Z]) {
+                  this->push_back(std::move(s));
+                  this->back().move({{atoms[a].x, atoms[a].y, atoms[a].z}});
+                } // shell loop
+              } // basis component loop
 
-        init();
-      }
+            }else{
 
-      /// forces solid harmonics/Cartesian Gaussians
-      /// @param solid if true, force all shells with L>1 to be solid harmonics, otherwise force all shells to Cartesian
-      void set_pure(bool solid) {
-        for(auto& s: *this) {
-          s.contr[0].pure = solid;
-        }
-        init();
-      }
+              auto Z = atoms[a].atomic_number;
+              auto component_basis_sets = all_comp_basis_sets[canonicalize_name(name_)];
+              // add each component in order
+              for(auto comp_idx=0; comp_idx!=component_basis_sets.size(); ++comp_idx) {
+                const auto& component_basis_set = component_basis_sets[comp_idx];
 
-      /// @return the number of basis functions in the basis; -1 if uninitialized
-      long nbf() const {
-        return nbf_;
-      }
-      /// @return the maximum number of primitives in a contracted Shell, i.e. maximum contraction length; 0 if uninitialized
-      size_t max_nprim() const {
-        return max_nprim_;
-      }
-      /// @return the maximum angular momentum of a contraction; -1 if uninitialized
-      size_t max_l() const {
-        return max_l_;
-      }
-      /// @return the map from shell index to index of the first basis function from this shell
-      /// \note basis functions are ordered as shells, i.e. shell2bf[i] >= shell2bf[j] iff i >= j
-      const std::vector<size_t>& shell2bf() const {
-        return shell2bf_;
-      }
-      /// Computes the map from shells to the corresponding atoms in \c atoms. If no atom matches the origin of a shell, it is mapped to -1.
-      /// @note coordinates must match \em exactly , i.e. shell2atom[k] == l iff atoms[l].x == *this[k].O[0] && atoms[l].y == *this[k].O[1] &&  atoms[l].z == *this[k].O[2]
-      /// @return the map from shell index to the atom in the list \c atoms that coincides with its origin;
-      std::vector<long> shell2atom(const std::vector<Atom>& atoms) const {
-        std::vector<long> result;
-        result.reserve(size());
-        for(const auto& s: *this) {
-          auto a = std::find_if(atoms.begin(), atoms.end(), [&s](const Atom& a){ return s.O[0] == a.x && s.O[1] == a.y && s.O[2] == a.z; } );
-          result.push_back( a != atoms.end() ? a - atoms.begin() : -1);
-        }
-        return result;
-      }
+                if (component_basis_set[Z].empty())
+                  throw std::string("did not find the basis for this Z in ") +
+                    basis_lib_path + "/" + basis_component_names[comp_idx] + ".g94";
 
-    private:
-      std::string name_;
-      long nbf_;
-      size_t max_nprim_;
-      int max_l_;
-      std::vector<size_t> shell2bf_;
+                for(auto s: component_basis_set[Z]) {
+                  this->push_back(std::move(s));
+                  this->back().move({{atoms[a].x, atoms[a].y, atoms[a].z}});
+                } // shell loop
+              } // basis component loop
 
-      void init() {
-        nbf_ = nbf(*this);
-        max_nprim_ = max_nprim(*this);
-        max_l_ = max_l(*this);
-        shell2bf_ = compute_shell2bf(*this);
-      }
-
-      struct canonicalizer {
-          char operator()(char c) {
-            char cc = ::tolower(c);
-            switch (cc) {
-              case '/': cc = 'I'; break;
             }
-            return cc;
+          } // atom loop
+
+          init();
+        }
+
+        /// forces solid harmonics/Cartesian Gaussians
+        /// @param solid if true, force all shells with L>1 to be solid harmonics, otherwise force all shells to Cartesian
+        void set_pure(bool solid) {
+          for(auto& s: *this) {
+            s.contr[0].pure = solid;
           }
-      };
-
-      static std::string canonicalize_name(const std::string& name) {
-        auto result = name;
-        std::transform(name.begin(), name.end(),
-                       result.begin(), BasisSet::canonicalizer());
-        return result;
-      }
-
-      // see http://www.gaussian.com/g_tech/g_ur/m_basis_sets.htm
-      bool gaussian_cartesian_d_convention(const std::string& canonical_name) {
-        // 3-21??g??, 4-31g??
-        if (canonical_name.find("3-21")    == 0 ||
-            canonical_name.find("4-31g")   == 0)
-          return true;
-        // 6-31??g?? but not 6-311 OR 6-31g()
-        if (canonical_name.find("6-31") == 0 && canonical_name[4] != '1') {
-          // to exclude 6-31??g() find the g, then check the next character
-          auto g_pos = canonical_name.find('g');
-          if (g_pos == std::string::npos) // wtf, I don't even know what this is, assume spherical d is OK
-            return false;
-          if (g_pos+1 == canonical_name.size()) // 6-31??g uses cartesian d
-            return true;
-          if (canonical_name[g_pos+1] == '*') // 6-31??g*? uses cartesian d
-            return true;
+          init();
         }
-        return false;
-      }
-      
-      /// decompose basis set name into components
-      std::vector<std::string> decompose_name_into_components(std::string name) {
-        std::vector<std::string> component_names;
-        // aug-cc-pvxz* = cc-pvxz* + augmentation-... , except aug-cc-pvxz-cabs
-        if ( (name.find("aug-cc-pv") == 0) && (name.find("cabs")==std::string::npos)  ) {
-          std::string base_name = name.substr(4);
-          component_names.push_back(base_name);
-          component_names.push_back(std::string("augmentation-") + base_name);
-        }
-        else
-          component_names.push_back(name);
 
-        return component_names;
-      }
-      
-      /** determines the path to the data directory, as follows:
-       *       <ol>
-       *         <li> specified by LIBINT_DATA_PATH environmental variable, if defined </li>
-       *         <li> specified by DATADIR macro variable, if defined </li>
-       *         <li> specified by SRCDATADIR macro variable, if defined </li>
-       *         <li> hardwired to directory \c @DATADIR_ABSOLUTE@/basis </li>
-       *       </ol>
-       *  @throw std::runtime_error if the path is not valid, or cannot be determined
-       *  @return valid path to the data directory
+        /// @return the number of basis functions in the basis; -1 if uninitialized
+        long nbf() const {
+          return nbf_;
+        }
+        /// @return the maximum number of primitives in a contracted Shell, i.e. maximum contraction length; 0 if uninitialized
+        size_t max_nprim() const {
+          return max_nprim_;
+        }
+        /// @return the maximum angular momentum of a contraction; -1 if uninitialized
+        size_t max_l() const {
+          return max_l_;
+        }
+        /// @return the map from shell index to index of the first basis function from this shell
+        /// \note basis functions are ordered as shells, i.e. shell2bf[i] >= shell2bf[j] iff i >= j
+        const std::vector<size_t>& shell2bf() const {
+          return shell2bf_;
+        }
+        /// Computes the map from shells to the corresponding atoms in \c atoms. If no atom matches the origin of a shell, it is mapped to -1.
+        /// @note coordinates must match \em exactly , i.e. shell2atom[k] == l iff atoms[l].x == *this[k].O[0] && atoms[l].y == *this[k].O[1] &&  atoms[l].z == *this[k].O[2]
+        /// @return the map from shell index to the atom in the list \c atoms that coincides with its origin;
+        std::vector<long> shell2atom(const std::vector<Atom>& atoms) const {
+          std::vector<long> result;
+          result.reserve(size());
+          for(const auto& s: *this) {
+            auto a = std::find_if(atoms.begin(), atoms.end(), [&s](const Atom& a){ return s.O[0] == a.x && s.O[1] == a.y && s.O[2] == a.z; } );
+            result.push_back( a != atoms.end() ? a - atoms.begin() : -1);
+          }
+          return result;
+        }
+
+      private:
+        std::string name_;
+        std::string customname_;
+        long nbf_;
+        size_t max_nprim_;
+        int max_l_;
+        std::vector<size_t> shell2bf_;
+
+        void init() {
+          nbf_ = nbf(*this);
+          max_nprim_ = max_nprim(*this);
+          max_l_ = max_l(*this);
+          shell2bf_ = compute_shell2bf(*this);
+        }
+
+        struct canonicalizer {
+            char operator()(char c) {
+              char cc = ::tolower(c);
+              switch (cc) {
+                case '/': cc = 'I'; break;
+              }
+              return cc;
+            }
+        };
+
+        static std::string canonicalize_name(const std::string& name) {
+          auto result = name;
+          std::transform(name.begin(), name.end(),
+                         result.begin(), BasisSet::canonicalizer());
+          return result;
+        }
+
+        // see http://www.gaussian.com/g_tech/g_ur/m_basis_sets.htm
+        bool gaussian_cartesian_d_convention(const std::string& canonical_name) {
+          // 3-21??g??, 4-31g??
+          if (canonical_name.find("3-21")    == 0 ||
+              canonical_name.find("4-31g")   == 0)
+            return true;
+          // 6-31??g?? but not 6-311 OR 6-31g()
+          if (canonical_name.find("6-31") == 0 && canonical_name[4] != '1') {
+            // to exclude 6-31??g() find the g, then check the next character
+            auto g_pos = canonical_name.find('g');
+            if (g_pos == std::string::npos) // wtf, I don't even know what this is, assume spherical d is OK
+              return false;
+            if (g_pos+1 == canonical_name.size()) // 6-31??g uses cartesian d
+              return true;
+            if (canonical_name[g_pos+1] == '*') // 6-31??g*? uses cartesian d
+              return true;
+          }
+          return false;
+        }
+        
+        /// decompose basis set name into components
+        std::vector<std::string> decompose_name_into_components(std::string name) {
+          std::vector<std::string> component_names;
+          // aug-cc-pvxz* = cc-pvxz* + augmentation-... , except aug-cc-pvxz-cabs
+          if ( (name.find("aug-cc-pv") == 0) && (name.find("cabs")==std::string::npos)  ) {
+            std::string base_name = name.substr(4);
+            component_names.push_back(base_name);
+            component_names.push_back(std::string("augmentation-") + base_name);
+          }
+          else
+            component_names.push_back(name);
+
+          return component_names;
+        }
+        
+        /** determines the path to the data directory, as follows:
+         *       <ol>
+         *         <li> specified by LIBINT_DATA_PATH environmental variable, if defined </li>
+         *         <li> specified by DATADIR macro variable, if defined </li>
+         *         <li> specified by SRCDATADIR macro variable, if defined </li>
+         *         <li> hardwired to directory \c @DATADIR_ABSOLUTE@/basis </li>
+         *       </ol>
+         *  @throw std::runtime_error if the path is not valid, or cannot be determined
+         *  @return valid path to the data directory
+         */
+        static std::string data_path() {
+          std::string path;
+          const char* data_path_env = getenv("LIBINT_DATA_PATH");
+          if (data_path_env) {
+            path = data_path_env;
+          }
+          else {
+  #if defined(DATADIR)
+            path = std::string{DATADIR};
+  #elif defined(SRCDATADIR)
+            path = std::string{SRCDATADIR};
+  #else
+            path = std::string("@DATADIR_ABSOLUTE@") + std::string("/basis");
+  #endif
+          }
+          // validate path
+          bool error = true;
+          if (not path.empty()) {
+            struct stat sb;
+            error = (::stat(path.c_str(), &sb) == -1);
+            error = error && not S_ISDIR(sb.st_mode);
+          }
+          if (error) {
+            std::ostringstream oss; oss << "BasisSet::data_path(): path \"" << path << "\" is not valid";
+            throw std::runtime_error(oss.str());
+          }
+          return path;
+        }
+
+      public:
+
+      /** 
+       * \brief Read in the atom labels the basis sets that are to be associated with them 
+       * 
+       * Also the coefficients to be used by choosing from an exsisting element
+       * @return map of atom labels with map of element and key of basis set string
+       *
+       * E.g. if in my geometry file atom 5 is a Oxygen and I want to use the basis set 
+       * of 6-311 with the coefficients of a carbon 
+       *
+       * basis_cust[5]["C"] = "6-311";
+       *
+       * The Z value is not changed here only the coefficients that are used
        */
-      static std::string data_path() {
-        std::string path;
-        const char* data_path_env = getenv("LIBINT_DATA_PATH");
-        if (data_path_env) {
-          path = data_path_env;
-        }
-        else {
-#if defined(DATADIR)
-          path = std::string{DATADIR};
-#elif defined(SRCDATADIR)
-          path = std::string{SRCDATADIR};
-#else
-          path = std::string("@DATADIR_ABSOLUTE@") + std::string("/basis");
-#endif
-        }
-        // validate path
-        bool error = true;
-        if (not path.empty()) {
-          struct stat sb;
-          error = (::stat(path.c_str(), &sb) == -1);
-          error = error && not S_ISDIR(sb.st_mode);
-        }
-        if (error) {
-          std::ostringstream oss; oss << "BasisSet::data_path(): path \"" << path << "\" is not valid";
-          throw std::runtime_error(oss.str());
-        }
-        return path;
-      }
+      static std::map<int,std::map<std::string,std::string>> read_custom(){
+        
+        std::map<int,std::map<std::string,std::string>> cust_basis;
+        if(not customname_.empty()){
 
-    public:
+          std::cout << "Will read custom file " << customfile_ << std::endl;
+          std::ifstream is(customfile_);
+          if(not is.good()) {
+            std::ostringstream oss;
+            oss << "BasisSet::read_custom(): count not open \"" << customfile_ << "\"" << std::endl;
+            throw std::runtime_error(oss.str());
+          }
+
+          std::string line;
+          std::getline(is,line); // Skip first line because it is a comment line
+
+          while(std::getline(is,line)){
+            std::istringstream iss(line);
+            int atom_label;
+            std::string atom_basis;
+            std::string atom_coef_type;
+            iss >> atom_label;
+            iss >> atom_basis;
+            iss >> atom_coef_type;
+            cust_basis[atom_label][atom_coef_type]=atom_basis; 
+          }
+        } 
+        
+        return cust_basis;
+      }
 
       /** reads in all basis sets from a Gaussian94-formatted basis set file (see https://bse.pnl.gov/bse/portal)
        *  @param[in] file_dot_g94 file name

@@ -30,6 +30,7 @@
 #include <iterator>
 #include <unordered_map>
 #include <mutex>
+#include <stdexcept>
 
 // Eigen matrix algebra library
 #include <eigen3/Eigen/Dense>
@@ -188,12 +189,18 @@ int main(int argc, char *argv[]) {
 
   try {
 
+    /*** =========================== ***/
+    /*** Setup Program Optionset      ***/
+    /*** =========================== ***/
+   
     po::options_description desc("Allowed options");
     desc.add_options()
       ("help","produce help message")
       ("geom-file",po::value<std::string>(),"xyz file containing geometry of atoms")
-      ("basis-set",po::value<std::string>(),"basis set to be used");
-
+      ("basis-set",po::value<std::string>(),"basis set to be used")
+      ("basis-file",po::value<std::string>(),"basis file used to add customization to the basis sets")
+      ("density-fit-basis",po::value<bool>(),"Density fitting basis name");
+      
     po::variables_map vm;
     po::store(po::parse_command_line(argc,argv,desc),vm);
     po::notify(vm);
@@ -203,6 +210,7 @@ int main(int argc, char *argv[]) {
       return 1;
     }
 
+    // read geometry from a file; by default read from h2o.xyz, else take filename (.xyz) from the command line
     std::string filename;
     if(vm.count("geom-file")){
       filename = vm["geom-file"].as<std::string>();
@@ -219,18 +227,29 @@ int main(int argc, char *argv[]) {
     }
     std::cout << "Basis set " << basisname << ".\n";
 
+    std::string basiscustom;
+    if(vm.count("basis-file")){
+      basiscustom = vm["basis-file"].as<std::string>();
+    }else{
+      basiscustom="";
+    }
+    std::cout << "Custom basis file " << basiscustom << ".\n";
+
+    bool do_density_fitting = false;
+    std::string dfbasisname = "";
+    if(vm.count("density-fit-basis")){
+#ifdef HAVE_DENSITY_FITTING
+      do_density_fitting = true;
+      dfbasisname = vm["density-fit-basis"].as<std::string>();
+#else
+      throw std::runtime_error("Density fitting is not enabled");
+#endif
+    }
+
     /*** =========================== ***/
     /*** initialize molecule         ***/
     /*** =========================== ***/
 
-    // read geometry from a file; by default read from h2o.xyz, else take filename (.xyz) from the command line
-    //const auto filename = (argc > 1) ? argv[1] : "h2o.xyz";
-    //const auto basisname = (argc > 2) ? argv[2] : "aug-cc-pVDZ";
-    bool do_density_fitting = false;
-#ifdef HAVE_DENSITY_FITTING
-    do_density_fitting = (argc > 3);
-    const auto dfbasisname = do_density_fitting ? argv[3] : "";
-#endif
     std::vector<Atom> atoms = read_geometry(filename);
 
     // set up thread pool
