@@ -32,9 +32,9 @@
 #include <mutex>
 
 // Eigen matrix algebra library
-#include <Eigen/Dense>
-#include <Eigen/Eigenvalues>
-#include <Eigen/Cholesky>
+#include <eigen3/Eigen/Dense>
+#include <eigen3/Eigen/Eigenvalues>
+#include <eigen3/Eigen/Cholesky>
 
 // have BTAS library?
 #ifdef LIBINT2_HAVE_BTAS
@@ -44,6 +44,9 @@
 // Libint Gaussian integrals library
 #include <libint2.hpp>
 #include <libint2/diis.h>
+
+// Boost library for string manipulation
+#include <boost/algorithm/string.hpp>
 
 #if defined(_OPENMP)
 # include <omp.h>
@@ -63,6 +66,8 @@ typedef Eigen::DiagonalMatrix<double, Eigen::Dynamic, Eigen::Dynamic>
 using libint2::Shell;
 using libint2::Atom;
 using libint2::BasisSet;
+
+void write_punfile(Matrix Coef,Matrix Evals);
 
 std::vector<Atom> read_geometry(const std::string& filename);
 Matrix compute_soad(const std::vector<Atom>& atoms);
@@ -295,6 +300,9 @@ int main(int argc, char *argv[]) {
         S_condition_number_threshold);
 
     Matrix D;
+
+    std::cout << "Size of Matrix D " << D.size() << std::endl;
+
     Matrix C_occ;
     Matrix evals;
     {  // use SOAD as the guess density
@@ -318,6 +326,7 @@ int main(int argc, char *argv[]) {
         Eigen::SelfAdjointEigenSolver<Matrix> eig_solver(X.transpose() * F * X);
         auto C = X * eig_solver.eigenvectors();
 
+        std::cout << "Coef Cs \n" << C << std::endl;
         // compute density, D = C(occ) . C(occ)T
         C_occ = C.leftCols(ndocc);
         D = C_occ * C_occ.transpose();
@@ -347,6 +356,9 @@ int main(int argc, char *argv[]) {
 
     // prepare for incremental Fock build ...
     Matrix D_diff = D;
+
+    Matrix C_final;
+
     Matrix F = H;
     bool reset_incremental_fock_formation = false;
     bool incremental_Fbuild_started = false;
@@ -418,7 +430,7 @@ int main(int argc, char *argv[]) {
       evals = eig_solver.eigenvalues();
       auto C = X * eig_solver.eigenvectors();
 
-
+      C_final = C;
       // compute density, D = C(occ) . C(occ)T
       C_occ = C.leftCols(ndocc);
       D = C_occ * C_occ.transpose();
@@ -435,6 +447,12 @@ int main(int argc, char *argv[]) {
 
     } while (((ediff_rel > conv) || (rms_error > conv)) && (iter < maxiter));
 
+    printf("Here are the ao matrix coefficients\n");
+    // Write coefficients to file (.pun) 
+    write_punfile(C_final,evals);
+    std::cout << C_final << std::endl;   
+    std::cout << std::endl;
+ 
     auto Mu = compute_1body_ints<libint2::OneBodyEngine::emultipole2>(obs);
     std::array<double,3> mu;
     std::array<double,6> qu;
@@ -517,6 +535,79 @@ int main(int argc, char *argv[]) {
   }
 
   return 0;
+}
+
+
+void write_punfile(Matrix Coef, Matrix Evals){
+
+  std::ofstream myfile;
+  myfile.open("out.pun");
+
+  myfile << "(5D15.8)\n";
+
+  for( size_t i=0;i<Coef.rows();++i){
+    double Energy = Evals(i,0);
+    
+    char bufferI[10];
+    char bufferI2[10];
+    std::sprintf(bufferI,"%5zu",i);
+    std::cout << "bufferI "<< bufferI << std::endl;
+    std::string Ival(bufferI);
+    std::cout << Ival << std::endl;
+
+    char bufEnergy[20];
+    std::sprintf(bufEnergy,"%.8e",Energy);
+    std::string strEnergy(bufEnergy);
+    boost::replace_all(strEnergy,"e","D"); 
+
+    if(Energy>0){
+      myfile << Ival << " Alpha MO OE = " << strEnergy << "\n"; 
+    }else{
+      myfile << Ival << " Alpha MO OE =" << strEnergy << "\n"; 
+    }
+    auto MOcoef = Coef.block(0,i,Coef.rows(),1);  
+
+    auto loops = ceil(Coef.rows()/5);
+    if(Coef.rows() % 5!=0) ++loops;
+    int rowNum = i*5;
+
+    for( size_t j=0;j<loops;++j){
+
+      int chunk = Coef.rows() - j*5;
+      if(chunk==0 || chunk>4) chunk=5;
+      for(size_t k=0;k<chunk;++k){
+        if(MOcoef(j*5+k,0)>0){     
+          char buffer[50];
+          std::sprintf(buffer,"%.8e",MOcoef(j*5+k,0));
+          std::string strE(buffer); 
+          boost::replace_all(strE,"e","D"); 
+          myfile << " " << strE;//MOcoef(j*5+k,0) << " "; 
+        }else{
+          char buffer[50];
+          std::sprintf(buffer,"%.8e",MOcoef(j*5+k,0));
+          std::string strE(buffer); 
+          boost::replace_all(strE,"e","D"); 
+          myfile << strE;//MOcoef(j*5+k,0); 
+        }
+      }
+      myfile << "\n";
+    }
+  }
+
+  myfile.close();
+/*  auto loops = ceil(Coef.rows()/5);
+  std::cout << "Number of loops of coefs " << loops << std::endl;
+  int rowNum = 5;
+
+  for( size_t i=0;i<loops;i++){
+
+    int chunk = rem(Coef.rows(),rowNum);
+    if(chunk==0) chunk=5;    
+    auto MOcoefs = Coef.block<0,i*5>(Coef.rows(),chunk);
+
+  }
+  */
+  return;
 }
 
 std::vector<Atom> read_geometry(const std::string& filename) {
