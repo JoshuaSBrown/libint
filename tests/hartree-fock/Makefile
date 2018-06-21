@@ -28,7 +28,8 @@ CXXTEST2SRC = $(TEST2).cc
 CXXTEST2OBJ = $(CXXTEST2SRC:%.cc=%.$(OBJSUF))
 CXXTEST2DEP = $(CXXTEST2SRC:%.cc=%.$(DEPSUF))
 
-check:: check1 check2
+#check:: check1 check2
+check:: check2
 
 check1::
 check2::
@@ -43,7 +44,7 @@ check1:: $(TEST1)
 	./$^ $(SRCDIR)/h2o.xyz | $(PYTHON) $(SRCDIR)/$^-validate.py
 
 check2:: $(TEST2)
-	./$^ $(SRCDIR)/h2o_rotated.xyz | $(PYTHON) $(SRCDIR)/$^-validate.py ../../src/lib/libint/MakeVars.features
+	./$^ --geom-file $(SRCDIR)/h2o_rotated.xyz | $(PYTHON) $(SRCDIR)/$^-validate.py ../../src/lib/libint/MakeVars.features
      endif
     endif
    endif
@@ -55,7 +56,7 @@ $(TEST1): $(CXXTEST1OBJ) $(COMPILER_LIB) $(COMPUTE_LIB)
 	$(LD) -o $@ $(LDFLAGS) $^ $(SYSLIBS)
 
 $(TEST2): $(CXXTEST2OBJ) $(COMPILER_LIB) $(COMPUTE_LIB)
-	$(LD) -o $@ $(LDFLAGS) $^ $(SYSLIBS) -lpthread
+	$(LD) -o $@ $(LDFLAGS) $^ $(SYSLIBS) -lpthread -lboost_program_options
 
 # Source files for timer and tester are to be compiled using CXXGEN
 $(TEST1) $(TEST2): CXX=$(CXXGEN)

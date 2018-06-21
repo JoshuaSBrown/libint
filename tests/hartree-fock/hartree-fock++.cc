@@ -47,11 +47,14 @@
 
 // Boost library for string manipulation
 #include <boost/algorithm/string.hpp>
+#include <boost/program_options.hpp>
 
 #if defined(_OPENMP)
 # include <omp.h>
 #endif
 
+
+namespace po = boost::program_options;
 // uncomment if want to report integral timings (only useful if nthreads == 1)
 // N.B. integral engine timings are controled in engine.h
 //#define REPORT_INTEGRAL_TIMINGS
@@ -185,13 +188,44 @@ int main(int argc, char *argv[]) {
 
   try {
 
+    po::options_description desc("Allowed options");
+    desc.add_options()
+      ("help","produce help message")
+      ("geom-file",po::value<std::string>(),"xyz file containing geometry of atoms")
+      ("basis-set",po::value<std::string>(),"basis set to be used");
+
+    po::variables_map vm;
+    po::store(po::parse_command_line(argc,argv,desc),vm);
+    po::notify(vm);
+
+    if(vm.count("help")){
+      std::cout << desc << "\n";
+      return 1;
+    }
+
+    std::string filename;
+    if(vm.count("geom-file")){
+      filename = vm["geom-file"].as<std::string>();
+    }else{
+      filename = "h2o.xyz";
+    }
+    std::cout << "Geometry input file " << filename << ".\n";
+
+    std::string basisname;
+    if(vm.count("basis-set")){
+      basisname = vm["basis-set"].as<std::string>();
+    }else{
+      basisname = "aug-cc-pvDZ";
+    }
+    std::cout << "Basis set " << basisname << ".\n";
+
     /*** =========================== ***/
     /*** initialize molecule         ***/
     /*** =========================== ***/
 
     // read geometry from a file; by default read from h2o.xyz, else take filename (.xyz) from the command line
-    const auto filename = (argc > 1) ? argv[1] : "h2o.xyz";
-    const auto basisname = (argc > 2) ? argv[2] : "aug-cc-pVDZ";
+    //const auto filename = (argc > 1) ? argv[1] : "h2o.xyz";
+    //const auto basisname = (argc > 2) ? argv[2] : "aug-cc-pVDZ";
     bool do_density_fitting = false;
 #ifdef HAVE_DENSITY_FITTING
     do_density_fitting = (argc > 3);

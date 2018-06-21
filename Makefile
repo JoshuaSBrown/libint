@@ -5,9 +5,9 @@ endif
 
 -include $(TOPDIR)/Makedirlist
 -include $(TOPDIR)/src/lib/MakeVars
-
+#tests/eri
 SUBDIRS = src
-CHECKSUBDIRS = tests/eri tests/hartree-fock
+CHECKSUBDIRS =  tests/hartree-fock
 CLEANSUBDIRS = $(SUBDIRS) $(CHECKSUBDIRS)
 ALLSUBDIRS = $(CLEANSUBDIRS) doc $(CHECKSUBDIRS)
 
