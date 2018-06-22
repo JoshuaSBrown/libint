@@ -28,6 +28,7 @@
 #include <fstream>
 #include <vector>
 #include <stdexcept>
+#include <map>
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -78,10 +79,12 @@ namespace libint2 {
       BasisSet(std::string name,
                const std::vector<Atom>& atoms, std::string customname="") : name_(std::move(name)),customname_(std::move(customname)) {
 
-        auto cust_basis = read_custom();
+        std::map<int, std::map< std::string, std::string > > cust_basis = read_custom(customname_);
         
-        // String is the basis component name
+        // String is the basis component set
         std::map<std::string,std::vector<std::vector<std::vector<libint2::Shell>>>> all_comp_basis_sets;
+        // String is the basis component set contains the names
+        std::map<std::string,std::vector<std::string>> all_basis_comp_names;
 
         std::string basis_lib_path = data_path();
         // Reading in default basis set used for most of the atoms
@@ -93,7 +96,7 @@ namespace libint2 {
 
           // parse the name into components
           std::vector<std::string> basis_component_names = decompose_name_into_components(canonical_name);
-
+          
           // ref_shells[component_idx][Z] => vector of Shells
           std::vector<std::vector<std::vector<libint2::Shell>>> component_basis_sets;
           component_basis_sets.reserve(basis_component_names.size());
@@ -107,6 +110,7 @@ namespace libint2 {
           }
           // Fully resolved initial name
           all_comp_basis_sets[canonical_name]=component_basis_sets;
+          all_basis_comp_names[canonical_name]=basis_component_names;
         }  
 
         
@@ -124,73 +128,78 @@ namespace libint2 {
               component_basis_sets.emplace_back(read_g94_basis_library(file_dot_g94, force_cartesian_d));
             }
             all_comp_basis_sets[canonical_name]=component_basis_sets;
+            all_basis_comp_names[canonical_name]=basis_component_names;
           }
         }
 
         
-          // for each atom find the corresponding basis components
-          for(auto a=0; a<atoms.size(); ++a) {
+        // for each atom find the corresponding basis components
+        for(auto a=0; a<atoms.size(); ++a) {
 
-            
-            // This is where we need to look to see if the specific atom has a customized basis set
-            // Cust basis uses the label of the atoms which start at 1 not 0
-            if(cust_basis.count(a+1)){
-                
-              // Will be using the Z for the atom we are stealing the coefficients from
-              using libint2::chemistry::element_info;
-              int Z = -1;
-              for(const auto& e: element_info){
-                if(strcaseequal(e.symbol,cust_basis[a+1].first)){
-                  Z = e.Z;
-                  break;
-                }
+
+          // This is where we need to look to see if the specific atom has a customized basis set
+          // Cust basis uses the label of the atoms which start at 1 not 0
+          if(cust_basis.count(a+1)){
+
+            // Will be using the Z for the atom we are stealing the coefficients from
+            using libint2::chemistry::element_info;
+            int Z = -1;
+            for(const auto& e: element_info){
+              std::string Sym = cust_basis[a+1].begin()->first;
+              if(strcaseequal(e.symbol,Sym)){
+                Z = e.Z;
+                break;
               }
-              if(Z==-1){
-                std::cerr << "Element Symbol " << cust_basis[a+1].first << std::endl;
-                throw std::runtime_error("Did not recognize element symbol in custom file");
-              }
-
-              auto basis_name = cust_basis[a+1].second.begin()->second;
-              auto canonical_name = canonicalize_name(basis_name);
-              auto component_basis_sets = all_comp_basis_sets[basis_name];
-
-              // add each component in order
-              for(auto comp_idx=0; comp_idx!=component_basis_sets.size(); ++comp_idx) {
-                const auto& component_basis_set = component_basis_sets[comp_idx];
-
-                if (component_basis_set[Z].empty())
-                  throw std::string("did not find the basis for this Z in ") +
-                    basis_lib_path + "/" + basis_component_names[comp_idx] + ".g94";
-
-                for(auto s: component_basis_set[Z]) {
-                  this->push_back(std::move(s));
-                  this->back().move({{atoms[a].x, atoms[a].y, atoms[a].z}});
-                } // shell loop
-              } // basis component loop
-
-            }else{
-
-              auto Z = atoms[a].atomic_number;
-              auto component_basis_sets = all_comp_basis_sets[canonicalize_name(name_)];
-              // add each component in order
-              for(auto comp_idx=0; comp_idx!=component_basis_sets.size(); ++comp_idx) {
-                const auto& component_basis_set = component_basis_sets[comp_idx];
-
-                if (component_basis_set[Z].empty())
-                  throw std::string("did not find the basis for this Z in ") +
-                    basis_lib_path + "/" + basis_component_names[comp_idx] + ".g94";
-
-                for(auto s: component_basis_set[Z]) {
-                  this->push_back(std::move(s));
-                  this->back().move({{atoms[a].x, atoms[a].y, atoms[a].z}});
-                } // shell loop
-              } // basis component loop
-
             }
-          } // atom loop
+            if(Z==-1){
+              std::cerr << "Element Symbol " << cust_basis[a+1].begin()->first << std::endl;
+              throw std::runtime_error("Did not recognize element symbol in custom file");
+            }
 
-          init();
-        }
+            auto basis_name = cust_basis[a+1].begin()->second;
+            auto canonical_name = canonicalize_name(basis_name);
+            auto component_basis_sets = all_comp_basis_sets[basis_name];
+            auto basis_component_names = all_basis_comp_names[basis_name];
+
+            // add each component in order
+            for(auto comp_idx=0; comp_idx!=component_basis_sets.size(); ++comp_idx) {
+              const auto& component_basis_set = component_basis_sets[comp_idx];
+
+              if (component_basis_set[Z].empty())
+                throw std::string("did not find the basis for this Z in ") +
+                  basis_lib_path + "/" + basis_component_names[comp_idx] + ".g94";
+
+              for(auto s: component_basis_set[Z]) {
+                this->push_back(std::move(s));
+                this->back().move({{atoms[a].x, atoms[a].y, atoms[a].z}});
+              } // shell loop
+            } // basis component loop
+
+          }else{
+
+            auto Z = atoms[a].atomic_number;
+            auto canonical_name = canonicalize_name(name_);
+            auto component_basis_sets = all_comp_basis_sets[canonicalize_name(canonical_name)];
+            auto basis_component_names = all_basis_comp_names[canonical_name];
+            // add each component in order
+            for(auto comp_idx=0; comp_idx!=component_basis_sets.size(); ++comp_idx) {
+              const auto& component_basis_set = component_basis_sets[comp_idx];
+
+              if (component_basis_set[Z].empty())
+                throw std::string("did not find the basis for this Z in ") +
+                  basis_lib_path + "/" + basis_component_names[comp_idx] + ".g94";
+
+              for(auto s: component_basis_set[Z]) {
+                this->push_back(std::move(s));
+                this->back().move({{atoms[a].x, atoms[a].y, atoms[a].z}});
+              } // shell loop
+            } // basis component loop
+
+          }
+        } // atom loop
+
+        init();
+      }
 
         /// forces solid harmonics/Cartesian Gaussians
         /// @param solid if true, force all shells with L>1 to be solid harmonics, otherwise force all shells to Cartesian
@@ -205,6 +214,18 @@ namespace libint2 {
         long nbf() const {
           return nbf_;
         }
+
+        std::map<int,int> nbf_per_atom(const std::vector<libint2::Shell>& shells) {
+          // Shells appear in the same order as the atoms
+          int atom_ind = 0;
+          std::map< int, int > nbf_p_atom;
+          for (const auto& shell: shells){
+            nbf_p_atom[atom_ind]=shell.size();
+            ++atom_ind;
+          }
+          return nbf_p_atom;
+        }
+
         /// @return the maximum number of primitives in a contracted Shell, i.e. maximum contraction length; 0 if uninitialized
         size_t max_nprim() const {
           return max_nprim_;
@@ -238,9 +259,12 @@ namespace libint2 {
         size_t max_nprim_;
         int max_l_;
         std::vector<size_t> shell2bf_;
-
+        // First int is the atom index (not label) it starts at 0
+        std::map<int,int> nbf_per_atom_;
+        
         void init() {
           nbf_ = nbf(*this);
+          nbf_per_atom_ = nbf_per_atom(*this);
           max_nprim_ = max_nprim(*this);
           max_l_ = max_l(*this);
           shell2bf_ = compute_shell2bf(*this);
@@ -352,36 +376,36 @@ namespace libint2 {
        *
        * The Z value is not changed here only the coefficients that are used
        */
-      static std::map<int,std::map<std::string,std::string>> read_custom(){
-        
-        std::map<int,std::map<std::string,std::string>> cust_basis;
-        if(not customname_.empty()){
+        std::map<int, std::map<std::string,std::string > > read_custom(std::string customfile){
 
-          std::cout << "Will read custom file " << customfile_ << std::endl;
-          std::ifstream is(customfile_);
-          if(not is.good()) {
-            std::ostringstream oss;
-            oss << "BasisSet::read_custom(): count not open \"" << customfile_ << "\"" << std::endl;
-            throw std::runtime_error(oss.str());
-          }
+          std::map<int,std::map<std::string,std::string>> cust_basis;
+          if(not customname_.empty()){
 
-          std::string line;
-          std::getline(is,line); // Skip first line because it is a comment line
+            std::cout << "Will read custom file " << customfile << std::endl;
+            std::ifstream is(customfile);
+            if(not is.good()) {
+              std::ostringstream oss;
+              oss << "BasisSet::read_custom(): count not open \"" << customfile << "\"" << std::endl;
+              throw std::runtime_error(oss.str());
+            }
 
-          while(std::getline(is,line)){
-            std::istringstream iss(line);
-            int atom_label;
-            std::string atom_basis;
-            std::string atom_coef_type;
-            iss >> atom_label;
-            iss >> atom_basis;
-            iss >> atom_coef_type;
-            cust_basis[atom_label][atom_coef_type]=atom_basis; 
-          }
-        } 
-        
-        return cust_basis;
-      }
+            std::string line;
+            std::getline(is,line); // Skip first line because it is a comment line
+
+            while(std::getline(is,line)){
+              std::istringstream iss(line);
+              int atom_label;
+              std::string atom_basis;
+              std::string atom_coef_type;
+              iss >> atom_label;
+              iss >> atom_basis;
+              iss >> atom_coef_type;
+              cust_basis[atom_label][atom_coef_type]=atom_basis; 
+            }
+          } 
+
+          return cust_basis;
+        }
 
       /** reads in all basis sets from a Gaussian94-formatted basis set file (see https://bse.pnl.gov/bse/portal)
        *  @param[in] file_dot_g94 file name
@@ -509,8 +533,11 @@ namespace libint2 {
 
       static size_t nbf(const std::vector<libint2::Shell>& shells) {
         size_t n = 0;
-        for (const auto& shell: shells)
+        // Shells appear in the same order as the atoms
+        int atom_ind = 0;
+        for (const auto& shell: shells){
           n += shell.size();
+        }
         return n;
       }
 

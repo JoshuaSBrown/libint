@@ -31,6 +31,7 @@
 #include <unordered_map>
 #include <mutex>
 #include <stdexcept>
+#include <map>
 
 // Eigen matrix algebra library
 #include <eigen3/Eigen/Dense>
@@ -301,7 +302,7 @@ int main(int argc, char *argv[]) {
     for(const auto& a: atoms)
       std::cout << a.atomic_number << " " << a.x << " " << a.y << " " << a.z << std::endl;
 
-    BasisSet obs(basisname, atoms);
+    BasisSet obs(basisname, atoms,basiscustom);
     cout << "orbital basis set rank = " << obs.nbf() << endl;
 
 #ifdef HAVE_DENSITY_FITTING
