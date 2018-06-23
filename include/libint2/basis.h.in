@@ -139,10 +139,12 @@ namespace libint2 {
         // for each atom find the corresponding basis components
         for(auto a=0; a<atoms.size(); ++a) {
 
+          nbf_per_atom_[a]=0;
           // This is where we need to look to see if the specific atom has a customized basis set
           // Cust basis uses the label of the atoms which start at 1 not 0
           if(cust_basis.count(a+1)){
 
+            std::cout << "a " << a << " has a customized basis set " << std::endl;
             // Will be using the Z for the atom we are stealing the coefficients from
             using libint2::chemistry::element_info;
             int Z = -1;
@@ -153,6 +155,7 @@ namespace libint2 {
                 break;
               }
             }
+            std::cout << "Mass Z " << Z << std::endl;
             if(Z==-1){
               std::cerr << "Element Symbol " << cust_basis[a+1].begin()->first << std::endl;
               throw std::runtime_error("Did not recognize element symbol in custom file");
@@ -166,12 +169,15 @@ namespace libint2 {
             // add each component in order
             for(auto comp_idx=0; comp_idx!=component_basis_sets.size(); ++comp_idx) {
               const auto& component_basis_set = component_basis_sets[comp_idx];
-
+              
               if (component_basis_set[Z].empty())
                 throw std::string("did not find the basis for this Z in ") +
                   basis_lib_path + "/" + basis_component_names[comp_idx] + ".g94";
 
               for(auto s: component_basis_set[Z]) {
+
+                nbf_per_atom_[a]=nbf_per_atom_[a]+s.size();
+                std::cout << "nbf_per_atom_ " << nbf_per_atom_[a] << " s.size " << s.size() << std::endl;
                 this->push_back(std::move(s));
                 this->back().move({{atoms[a].x, atoms[a].y, atoms[a].z}});
               } // shell loop
@@ -179,9 +185,9 @@ namespace libint2 {
 
           }else{
 
-            std::cerr << "Getting Atom number " << a << std::endl;
+            std::cout << "Atom index " << a << " is not using a customized basis set" << std::endl;
             auto Z = atoms[a].atomic_number;
-            std::cerr << "Z " << Z << std::endl;
+            std::cout << "Mass Z " << Z << std::endl;
             auto canonical_name = canonicalize_name(name_);
             std::cerr << "canonical name " << canonical_name << std::endl;
             auto component_basis_sets = all_comp_basis_sets[canonical_name];
@@ -194,9 +200,15 @@ namespace libint2 {
                 throw std::string("did not find the basis for this Z in ") +
                   basis_lib_path + "/" + basis_component_names[comp_idx] + ".g94";
 
+              std::cout << "component_basis_set size for Z " << Z << " is " << component_basis_set.size() << std::endl;
+              std::cout << "component_basis_set[Z].size() " << component_basis_set[Z].size() << std::endl; 
               for(auto s: component_basis_set[Z]) {
+
+                std::cout << "Shell size s " << s.size() << std::endl;                
+                nbf_per_atom_[a]=nbf_per_atom_[a]+s.size();
                 this->push_back(std::move(s));
                 this->back().move({{atoms[a].x, atoms[a].y, atoms[a].z}});
+
               } // shell loop
             } // basis component loop
 
@@ -221,7 +233,7 @@ namespace libint2 {
           return nbf_;
         }
 
-        std::map<int,int> nbf_per_atom(const std::vector<libint2::Shell>& shells) {
+/*        std::map<int,int> nbf_per_atom(const std::vector<libint2::Shell>& shells) {
           // Shells appear in the same order as the atoms
           int atom_ind = 0;
           std::map< int, int > nbf_p_atom;
@@ -230,7 +242,7 @@ namespace libint2 {
             ++atom_ind;
           }
           return nbf_p_atom;
-        }
+        }*/
 
         // Determine if the orbitals will be constrained or not
         bool constrain(void){
@@ -308,7 +320,6 @@ namespace libint2 {
 
         void init() {
           nbf_ = nbf(*this);
-          nbf_per_atom_ = nbf_per_atom(*this);
           max_nprim_ = max_nprim(*this);
           max_l_ = max_l(*this);
           shell2bf_ = compute_shell2bf(*this);
@@ -621,13 +632,15 @@ namespace libint2 {
           }
         }
 
+
+        std::cout << " Ref shell for H size " << ref_shells.at(1).size() << std::endl;
+        std::cout << " Ref shell for O size " << ref_shells.at(8).size() << std::endl;
         return ref_shells;
       }
 
       static size_t nbf(const std::vector<libint2::Shell>& shells) {
         size_t n = 0;
         // Shells appear in the same order as the atoms
-        int atom_ind = 0;
         for (const auto& shell: shells){
           n += shell.size();
         }

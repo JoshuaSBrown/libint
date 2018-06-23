@@ -307,6 +307,7 @@ int main(int argc, char *argv[]) {
 
     BasisSet obs(basisname, atoms,basiscustom);
     if(not cstname.empty()){
+      std::cerr << "Setting constraints" << std::endl;
       obs.setConstraints(cstname);
     }
     cout << "orbital basis set rank = " << obs.nbf() << endl;
@@ -493,7 +494,7 @@ int main(int argc, char *argv[]) {
       C_final = C;
       C_occ = C.leftCols(ndocc);
       if(obs.constrain()){
-        constrainCoef(C_occ,obs,S);
+        constrainCoef(C_final,obs,S);
       }
       // compute density, D = C(occ) . C(occ)T
       D = C_occ * C_occ.transpose();
@@ -614,12 +615,19 @@ void constrainCoef(Matrix& coef, BasisSet obs, Matrix S){
   // Each MO is a column in the coef matrix 
   // Step 1 cycle through the groups
   for( auto groupIndx=0 ; groupIndx<obs.numGroups();++groupIndx){
-   
+  
+    std::cout << "GROUP " << groupIndx << std::endl; 
     int matrix_elem_row = 0; 
     // Step 2 set make all elements in coef_temp and S_temp matrix to 0 if they are not in the group
-    auto coef_temp = coef;
-    auto S_temp = S;
 
+    std::cout << "coef " << std::endl;
+    std::cout << coef << std::endl;
+    auto coef_temp = coef;
+  
+    std::cout << "S" << std::endl;
+    std::cout << S << std::endl;
+    auto S_temp = S;
+    
     // Cycle the atoms 
     for( auto atm_indx=0;atm_indx<obs.numAtoms();++atm_indx){
       // Determine the number of basis functions the atom has
@@ -627,13 +635,29 @@ void constrainCoef(Matrix& coef, BasisSet obs, Matrix S){
       
       // Determine if they are in the same group if not set the rows associated
       // these particular atom basis functions equal to 0
-
+      std::cout << "atom indx "<< atm_indx;
+      std::cout << " atom Group " << obs.atomGroup(atm_indx);
+      std::cout << " groupIndx " << groupIndx;
+      std::cout << " num atms in basis " << num_atm_bfn << std::endl;
       // Will also need to set the S cols and rows equal to 0 as well
       if(obs.atomGroup(atm_indx)!=groupIndx){
-        coef_temp.block(matrix_elem_row,0,coef_temp.cols(),num_atm_bfn);
+
+        std::cout << "matrix_elem_row " << matrix_elem_row;
+        std::cout << " coef_temp.cols() " << coef_temp.cols();
+        std::cout << " num_atm_bfn " << num_atm_bfn << std::endl;
+
+        for(int bas=0;bas<num_atm_bfn;++bas){
+          for(int c=0;c<coef_temp.cols();++c) {
+            coef_temp(matrix_elem_row+bas,c) = 0;
+            S_temp(matrix_elem_row+bas,c) = 0;
+            S_temp(c,matrix_elem_row+bas) = 0;
+          }
+
+        }
+        //coef_temp.block(matrix_elem_row,0,coef_temp.cols(),num_atm_bfn) = Matrix::Zero(coef_temp.cols(),num_atm_bfn);
   
-        S_temp.block(matrix_elem_row,0,coef_temp.cols(),num_atm_bfn);
-        S_temp.block(0,matrix_elem_row,num_atm_bfn,coef_temp.cols()); 
+        //S_temp.block(matrix_elem_row,0,coef_temp.cols(),num_atm_bfn) = Matrix::Zero(coef_temp.cols(),num_atm_bfn);
+        //S_temp.block(0,matrix_elem_row,num_atm_bfn,coef_temp.cols()) = Matrix::Zero(num_atm_bfn,coef_temp.cols()); 
 
       }
 
@@ -643,6 +667,12 @@ void constrainCoef(Matrix& coef, BasisSet obs, Matrix S){
     
     // Calculate the Overlap will not have 1's along the diagonal which is what we
     // ultimately want wafter we normalize
+
+    std::cout << "S_temp" << std::endl;
+    std::cout << S_temp << std::endl;
+
+    std::cout << "coef_temp" << std::endl;
+    std::cout << coef_temp << std::endl;
     auto Overlap = coef_temp * S_temp * coef_temp.transpose();
    
     auto Diag = Overlap.diagonal(); 
@@ -659,6 +689,8 @@ void constrainCoef(Matrix& coef, BasisSet obs, Matrix S){
     }
 
     std::cout << Diag_Sqrt_Inv << std::endl;
+
+    
   }
 
 
