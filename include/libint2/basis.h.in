@@ -39,6 +39,8 @@
 #include <libint2/atom.h>
 #include <libint2/chemistry/elements.h>
 
+#include <boost/lexical_cast.hpp>
+
 namespace libint2 {
 
   /// BasisSet is a slightly decorated \c std::vector of \c libint2::Shell objects.
@@ -132,10 +134,10 @@ namespace libint2 {
           }
         }
 
+        std::cerr << "Finding Corresponding Basis function components" << std::endl;
         
         // for each atom find the corresponding basis components
         for(auto a=0; a<atoms.size(); ++a) {
-
 
           // This is where we need to look to see if the specific atom has a customized basis set
           // Cust basis uses the label of the atoms which start at 1 not 0
@@ -158,8 +160,8 @@ namespace libint2 {
 
             auto basis_name = cust_basis[a+1].begin()->second;
             auto canonical_name = canonicalize_name(basis_name);
-            auto component_basis_sets = all_comp_basis_sets[basis_name];
-            auto basis_component_names = all_basis_comp_names[basis_name];
+            auto component_basis_sets = all_comp_basis_sets[canonical_name];
+            auto basis_component_names = all_basis_comp_names[canonical_name];
 
             // add each component in order
             for(auto comp_idx=0; comp_idx!=component_basis_sets.size(); ++comp_idx) {
@@ -177,9 +179,12 @@ namespace libint2 {
 
           }else{
 
+            std::cerr << "Getting Atom number " << a << std::endl;
             auto Z = atoms[a].atomic_number;
+            std::cerr << "Z " << Z << std::endl;
             auto canonical_name = canonicalize_name(name_);
-            auto component_basis_sets = all_comp_basis_sets[canonicalize_name(canonical_name)];
+            std::cerr << "canonical name " << canonical_name << std::endl;
+            auto component_basis_sets = all_comp_basis_sets[canonical_name];
             auto basis_component_names = all_basis_comp_names[canonical_name];
             // add each component in order
             for(auto comp_idx=0; comp_idx!=component_basis_sets.size(); ++comp_idx) {
@@ -198,6 +203,7 @@ namespace libint2 {
           }
         } // atom loop
 
+        std::cerr << "Calling init" << std::endl;
         init();
       }
 
@@ -226,6 +232,35 @@ namespace libint2 {
           return nbf_p_atom;
         }
 
+        // Determine if the orbitals will be constrained or not
+        bool constrain(void){
+          return groups_.size()>0;
+        }
+
+        size_t numGroups(void){
+          return groups_.size();
+        }        
+
+        size_t numAtoms(void){
+          return nbf_per_atom_.size();
+        }
+
+        int atomGroup(int atomIndx){
+          return group_[atomIndx];
+        }
+
+        int numAtomBFNs(int atomIndx){
+          return nbf_per_atom_[atomIndx];
+        }
+
+        std::map<int,int> init_group(){
+          std::map<int,int> group;
+          size_t num_atoms = nbf_per_atom_.size();
+          for( size_t i=0; i<num_atoms; ++i){
+            group[i]=0;
+          } 
+          return group;
+        }
         /// @return the maximum number of primitives in a contracted Shell, i.e. maximum contraction length; 0 if uninitialized
         size_t max_nprim() const {
           return max_nprim_;
@@ -260,14 +295,28 @@ namespace libint2 {
         int max_l_;
         std::vector<size_t> shell2bf_;
         // First int is the atom index (not label) it starts at 0
+        // Second int is the number of basis functions associated with that atom
         std::map<int,int> nbf_per_atom_;
-        
+
+        // First int is the atom index (not label) it starts at 0
+        // Second int is the group id 
+        std::map<int,int> group_;
+        // map of all the groups and the number of basis functions in each of them
+        // first int is group ind
+        // Second int is the number of basis functions
+        std::map<int,long> groups_;
+
         void init() {
           nbf_ = nbf(*this);
           nbf_per_atom_ = nbf_per_atom(*this);
           max_nprim_ = max_nprim(*this);
           max_l_ = max_l(*this);
           shell2bf_ = compute_shell2bf(*this);
+          std::cerr << "calling init group" << std::endl;
+          group_ = init_group();
+          std::cerr << "calling nbf_" << std::endl;
+          groups_[0]=nbf_;
+          std::cerr << "Init Success" << std::endl;
         }
 
         struct canonicalizer {
@@ -363,6 +412,50 @@ namespace libint2 {
 
       public:
 
+      /**
+       * \brief determines which atoms belong to which groups by reading a file
+       *
+       * The file has the .cst extension and contains the atom LABELS and the 
+       * group ids (Group id 0 is the default) 
+       * The groups are used during the scf calculation to enforce a probability
+       * of 1 on the coefficients blonging to each group. The number of MO in which
+       * the constraint is enforced depends on the number of basis functions that 
+       * are in each group
+       */
+        void setConstraints(std::string cst_filename){
+          if(not cst_filename.empty()){
+            std::cout << "Will read constraint file " << cst_filename << std::endl;
+            std::ifstream is(cst_filename);
+            if(not is.good()){
+              std::ostringstream oss;
+              oss << "BasisSet::setConstraints(): file cannot be opened \"" << cst_filename << "\"" << std::endl;
+              throw std::runtime_error(oss.str());
+            }
+
+            std::string line;
+            std::getline(is,line); // Skip first line because it is a comment line
+            
+            while(std::getline(is,line)){
+              std::istringstream iss(line);
+              int atom_label;
+              int group_id;
+              iss >> atom_label;
+              iss >> group_id;
+              if(group_id<0){
+                throw std::runtime_error("Group id must be a positive integer\n");
+              }
+              group_[(atom_label-1)] = group_id;
+            }
+          }
+
+          // Determine how many basis functions are in each group
+          groups_.clear();
+          for( int atm_ind=0; atm_ind<group_.size();++atm_ind ){
+            groups_[group_[atm_ind]] = groups_[group_[atm_ind]] + boost::lexical_cast<long>(nbf_per_atom_[atm_ind]); 
+          }
+
+        }
+
       /** 
        * \brief Read in the atom labels the basis sets that are to be associated with them 
        * 
@@ -379,13 +472,13 @@ namespace libint2 {
         std::map<int, std::map<std::string,std::string > > read_custom(std::string customfile){
 
           std::map<int,std::map<std::string,std::string>> cust_basis;
-          if(not customname_.empty()){
+          if(customname_.compare("")!=0){
 
             std::cout << "Will read custom file " << customfile << std::endl;
             std::ifstream is(customfile);
             if(not is.good()) {
               std::ostringstream oss;
-              oss << "BasisSet::read_custom(): count not open \"" << customfile << "\"" << std::endl;
+              oss << "BasisSet::read_custom(): file cannot be opened \"" << customfile << "\"" << std::endl;
               throw std::runtime_error(oss.str());
             }
 

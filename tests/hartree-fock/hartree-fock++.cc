@@ -72,6 +72,8 @@ using libint2::Shell;
 using libint2::Atom;
 using libint2::BasisSet;
 
+void constrainCoef(Matrix& coef, BasisSet obs,Matrix S);
+
 void write_punfile(Matrix Coef,Matrix Evals);
 
 std::vector<Atom> read_geometry(const std::string& filename);
@@ -191,7 +193,7 @@ int main(int argc, char *argv[]) {
   try {
 
     /*** =========================== ***/
-    /*** Setup Program Optionset      ***/
+    /*** Setup Program Options       ***/
     /*** =========================== ***/
    
     po::options_description desc("Allowed options");
@@ -200,7 +202,8 @@ int main(int argc, char *argv[]) {
       ("geom-file",po::value<std::string>(),"xyz file containing geometry of atoms")
       ("basis-set",po::value<std::string>(),"basis set to be used")
       ("basis-file",po::value<std::string>(),"basis file used to add customization to the basis sets")
-      ("density-fit-basis",po::value<bool>(),"Density fitting basis name");
+      ("density-fit-basis",po::value<bool>(),"Density fitting basis name")
+      ("constrain-file",po::value<std::string>(),"Constrain file lists atoms where the molecular orbital probability will be constrained");
       
     po::variables_map vm;
     po::store(po::parse_command_line(argc,argv,desc),vm);
@@ -212,29 +215,29 @@ int main(int argc, char *argv[]) {
     }
 
     // read geometry from a file; by default read from h2o.xyz, else take filename (.xyz) from the command line
-    std::string filename;
+    std::string filename = "h2o.xyz";
     if(vm.count("geom-file")){
       filename = vm["geom-file"].as<std::string>();
-    }else{
-      filename = "h2o.xyz";
     }
     std::cout << "Geometry input file " << filename << ".\n";
 
-    std::string basisname;
+    std::string basisname = "aug-cc-pvDZ";
     if(vm.count("basis-set")){
       basisname = vm["basis-set"].as<std::string>();
-    }else{
-      basisname = "aug-cc-pvDZ";
     }
     std::cout << "Basis set " << basisname << ".\n";
 
-    std::string basiscustom;
+    std::string basiscustom = "";
     if(vm.count("basis-file")){
       basiscustom = vm["basis-file"].as<std::string>();
-    }else{
-      basiscustom="";
     }
     std::cout << "Custom basis file " << basiscustom << ".\n";
+
+    std::string cstname = "";
+    if(vm.count("constrain-file")){
+      cstname = vm["constrain-file"].as<std::string>();
+    }
+    std::cout << "Constrain file name " << cstname << ".\n";
 
     bool do_density_fitting = false;
     std::string dfbasisname = "";
@@ -281,7 +284,7 @@ int main(int argc, char *argv[]) {
     for (auto i = 0; i < atoms.size(); ++i)
       nelectron += atoms[i].atomic_number;
     const auto ndocc = nelectron / 2;
-    cout << "# of electrons = " << nelectron << endl;
+    cerr << "# of electrons = " << nelectron << endl;
 
     // compute the nuclear repulsion energy
     auto enuc = 0.0;
@@ -294,7 +297,7 @@ int main(int argc, char *argv[]) {
         auto r = sqrt(r2);
         enuc += atoms[i].atomic_number * atoms[j].atomic_number / r;
       }
-    cout << "Nuclear repulsion energy = " << std::setprecision(15) << enuc << endl;
+    cerr << "Nuclear repulsion energy = " << std::setprecision(15) << enuc << endl;
 
     libint2::Shell::do_enforce_unit_normalization(false);
 
@@ -303,6 +306,9 @@ int main(int argc, char *argv[]) {
       std::cout << a.atomic_number << " " << a.x << " " << a.y << " " << a.z << std::endl;
 
     BasisSet obs(basisname, atoms,basiscustom);
+    if(not cstname.empty()){
+      obs.setConstraints(cstname);
+    }
     cout << "orbital basis set rank = " << obs.nbf() << endl;
 
 #ifdef HAVE_DENSITY_FITTING
@@ -485,8 +491,11 @@ int main(int argc, char *argv[]) {
       auto C = X * eig_solver.eigenvectors();
 
       C_final = C;
-      // compute density, D = C(occ) . C(occ)T
       C_occ = C.leftCols(ndocc);
+      if(obs.constrain()){
+        constrainCoef(C_occ,obs,S);
+      }
+      // compute density, D = C(occ) . C(occ)T
       D = C_occ * C_occ.transpose();
       D_diff = D - D_last;
 
@@ -526,6 +535,7 @@ int main(int argc, char *argv[]) {
       // one-body contributions to the forces
       //////////
       auto T1 = compute_1body_deriv_ints<libint2::OneBodyEngine::kinetic>(1, obs, atoms);
+
       auto V1 = compute_1body_deriv_ints<libint2::OneBodyEngine::nuclear>(1, obs, atoms);
       for(auto atom=0, i=0; atom!=atoms.size(); ++atom) {
         for(auto xyz=0; xyz!=3; ++xyz, ++i) {
@@ -591,6 +601,89 @@ int main(int argc, char *argv[]) {
   return 0;
 }
 
+/**
+ * \bief constrains coeficients
+ *
+ * Simply want to normalize the coefficients so that they are localized over
+ * the appropriate groups
+ */
+void constrainCoef(Matrix& coef, BasisSet obs, Matrix S){
+
+  // Keep in mind the rows correspond to the AO basis functions not the columns
+
+  // Each MO is a column in the coef matrix 
+  // Step 1 cycle through the groups
+  for( auto groupIndx=0 ; groupIndx<obs.numGroups();++groupIndx){
+   
+    int matrix_elem_row = 0; 
+    // Step 2 set make all elements in coef_temp and S_temp matrix to 0 if they are not in the group
+    auto coef_temp = coef;
+    auto S_temp = S;
+
+    // Cycle the atoms 
+    for( auto atm_indx=0;atm_indx<obs.numAtoms();++atm_indx){
+      // Determine the number of basis functions the atom has
+      auto num_atm_bfn = obs.numAtomBFNs(atm_indx);
+      
+      // Determine if they are in the same group if not set the rows associated
+      // these particular atom basis functions equal to 0
+
+      // Will also need to set the S cols and rows equal to 0 as well
+      if(obs.atomGroup(atm_indx)!=groupIndx){
+        coef_temp.block(matrix_elem_row,0,coef_temp.cols(),num_atm_bfn);
+  
+        S_temp.block(matrix_elem_row,0,coef_temp.cols(),num_atm_bfn);
+        S_temp.block(0,matrix_elem_row,num_atm_bfn,coef_temp.cols()); 
+
+      }
+
+      // Starts at 0
+      matrix_elem_row+=num_atm_bfn-1;
+    }
+    
+    // Calculate the Overlap will not have 1's along the diagonal which is what we
+    // ultimately want wafter we normalize
+    auto Overlap = coef_temp * S_temp * coef_temp.transpose();
+   
+    auto Diag = Overlap.diagonal(); 
+
+
+    std::cout << "Here is the diagonal of the matrix " << std::endl;
+    std::cout << Diag << std::endl;
+  
+    std::cout << "Here is the diagonal of the matrix after sqrt and inv" << std::endl;
+    Matrix Diag_Sqrt_Inv = Matrix::Zero(Overlap.rows(),Overlap.cols());
+    for(int i=0;i<Diag_Sqrt_Inv.rows();++i){
+      Diag_Sqrt_Inv(i,i) = 1/sqrt(Overlap(i,i));
+      std::cout << Diag_Sqrt_Inv(i,i) << std::endl;
+    }
+
+    std::cout << Diag_Sqrt_Inv << std::endl;
+  }
+
+
+// Step 3 Symmetrically orthonormalize the matrix associated with the group 
+
+// Step 4 Find the eigenvectors
+
+// Step 5 set values in coef matrix to new eigenvectors
+    // compute orthogonalizer X such that X.transpose() . S . X = I
+//    Matrix X, Xinv;
+//    double XtX_condition_number; // condition number of "re-conditioned" overlap obtained as Xinv.transpose() . Xinv
+                                 // one should think of columns of Xinv as the conditioned basis
+                                 // Re: name ... cond # (Xinv.transpose() . Xinv) = cond # (X.transpose() . X)
+    // by default assume can manage to compute with condition number of S <= 1/eps
+    // this is probably too optimistic, but in well-behaved cases even 10^11 is OK
+//    double S_condition_number_threshold = 1.0/std::numeric_limits<double>::epsilon();
+//    std::tie(X, Xinv, XtX_condition_number) = conditioning_orthogonalizer(S,
+//        S_condition_number_threshold);
+
+// Keep in mind that the inv(sqrtm(S)) is the same as X 
+
+// auto C = X * eig_solver.eigenvectors();
+
+
+}
 
 void write_punfile(Matrix Coef, Matrix Evals){
 
